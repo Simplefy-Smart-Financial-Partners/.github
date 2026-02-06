@@ -32,6 +32,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.event.pull_request.base.ref }}
 
       - name: Validate conventions
         id: validate
@@ -44,7 +48,7 @@ jobs:
           REQUIRE_SCOPE: ${{ inputs.require_scope }}
         run: |
           #!/bin/bash
-          set -euo pipefail
+          set -uo pipefail
 
           # ──────────────────────────────────────────────
           # Build regex patterns from inputs
@@ -116,32 +120,42 @@ jobs:
           INVALID_COMMITS=""
           MISSING_AB_COMMITS=""
 
-          while IFS= read -r line; do
-            # Skip empty lines
-            [ -z "${line}" ] && continue
+          # Find merge base for reliable commit range
+          MERGE_BASE=$(git merge-base "${BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || echo "${BASE_SHA}")
+          echo "  Using commit range: ${MERGE_BASE:0:7}..${HEAD_SHA:0:7}"
+          echo ""
 
-            SHA="${line%% *}"
-            MSG="${line#* }"
-            echo "  Commit: ${MSG}"
+          COMMIT_LOG=$(git log --oneline "${MERGE_BASE}..${HEAD_SHA}" 2>/dev/null || true)
 
-            # Skip merge commits
-            if [[ "${MSG}" =~ ^Merge ]]; then
-              echo "    ⏭️  Merge commit — skipped"
-              continue
-            fi
+          if [ -z "${COMMIT_LOG}" ]; then
+            echo "  ⚠️  No commits found in range — skipping commit validation"
+          else
+            while IFS= read -r line; do
+              [ -z "${line}" ] && continue
 
-            if [[ "${MSG}" =~ ${COMMIT_REGEX} ]]; then
-              echo "    ✅ Format OK"
-            else
-              echo "    ❌ Format invalid"
-              INVALID_COMMITS="${INVALID_COMMITS}\n  - \`${MSG}\` (${SHA:0:7})"
-            fi
+              SHA="${line%% *}"
+              MSG="${line#* }"
+              echo "  Commit: ${MSG}"
 
-            if [ "${REQUIRE_AB}" = "true" ] && [[ ! "${MSG}" =~ ${AB_REGEX} ]]; then
-              echo "    ❌ Missing AB# reference"
-              MISSING_AB_COMMITS="${MISSING_AB_COMMITS}\n  - \`${MSG}\` (${SHA:0:7})"
-            fi
-          done < <(git log --oneline "${BASE_SHA}..${HEAD_SHA}")
+              # Skip merge commits
+              if [[ "${MSG}" =~ ^Merge ]]; then
+                echo "    ⏭️  Merge commit — skipped"
+                continue
+              fi
+
+              if [[ "${MSG}" =~ ${COMMIT_REGEX} ]]; then
+                echo "    ✅ Format OK"
+              else
+                echo "    ❌ Format invalid"
+                INVALID_COMMITS="${INVALID_COMMITS}\n  - \`${MSG}\` (${SHA:0:7})"
+              fi
+
+              if [ "${REQUIRE_AB}" = "true" ] && [[ ! "${MSG}" =~ ${AB_REGEX} ]]; then
+                echo "    ❌ Missing AB# reference"
+                MISSING_AB_COMMITS="${MISSING_AB_COMMITS}\n  - \`${MSG}\` (${SHA:0:7})"
+              fi
+            done <<< "${COMMIT_LOG}"
+          fi
 
           if [ -n "${INVALID_COMMITS}" ]; then
             ((FAIL_COUNT++))
