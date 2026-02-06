@@ -18,6 +18,11 @@ on:
         required: false
         type: boolean
         default: false
+      validate_commits:
+        description: "Validate individual commit messages (set false to only check PR title)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   pull-requests: write
@@ -46,6 +51,7 @@ jobs:
           VALID_TYPES: ${{ inputs.valid_types }}
           REQUIRE_AB: ${{ inputs.require_ab_link }}
           REQUIRE_SCOPE: ${{ inputs.require_scope }}
+          VALIDATE_COMMITS: ${{ inputs.validate_commits }}
         run: |
           #!/bin/bash
 
@@ -116,64 +122,68 @@ jobs:
           # ──────────────────────────────────────────────
           echo "── Commit Messages ──"
 
-          INVALID_COMMITS=""
-          MISSING_AB_COMMITS=""
-
-          # Find merge base for reliable commit range
-          MERGE_BASE=$(git merge-base "${BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || echo "${BASE_SHA}")
-          echo "  Using commit range: ${MERGE_BASE:0:7}..${HEAD_SHA:0:7}"
-          echo ""
-
-          COMMIT_LOG=$(git log --oneline "${MERGE_BASE}..${HEAD_SHA}" 2>/dev/null || true)
-
-          if [ -z "${COMMIT_LOG}" ]; then
-            echo "  ⚠️  No commits found in range — skipping commit validation"
-          else
-            while IFS= read -r line; do
-              [ -z "${line}" ] && continue
-
-              SHA="${line%% *}"
-              MSG="${line#* }"
-              echo "  Commit: ${MSG}"
-
-              # Skip merge commits
-              if [[ "${MSG}" =~ ^Merge ]]; then
-                echo "    ⏭️  Merge commit — skipped"
-                continue
-              fi
-
-              if [[ "${MSG}" =~ ${COMMIT_REGEX} ]]; then
-                echo "    ✅ Format OK"
-              else
-                echo "    ❌ Format invalid"
-                INVALID_COMMITS="${INVALID_COMMITS}\n  - \`${MSG}\` (${SHA:0:7})"
-              fi
-
-              if [ "${REQUIRE_AB}" = "true" ] && [[ ! "${MSG}" =~ ${AB_REGEX} ]]; then
-                echo "    ❌ Missing AB# reference"
-                MISSING_AB_COMMITS="${MISSING_AB_COMMITS}\n  - \`${MSG}\` (${SHA:0:7})"
-              fi
-            done <<< "${COMMIT_LOG}"
-          fi
-
-          if [ -n "${INVALID_COMMITS}" ]; then
-            FAIL_COUNT=$((FAIL_COUNT + 1))
-            ERRORS="${ERRORS}\n❌ **Commit messages** with invalid format:${INVALID_COMMITS}\n   Expected: \`<type>(scope): <description>${AB_SUFFIX}\`\n"
-          else
-            PASS_COUNT=$((PASS_COUNT + 1))
-            echo "  ✅ All commit messages match convention"
-          fi
-
-          if [ "${REQUIRE_AB}" = "true" ]; then
-            if [ -n "${MISSING_AB_COMMITS}" ]; then
+          if [ "${VALIDATE_COMMITS}" = "true" ]; then
+            INVALID_COMMITS=""
+            MISSING_AB_COMMITS=""
+  
+            # Find merge base for reliable commit range
+            MERGE_BASE=$(git merge-base "${BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || echo "${BASE_SHA}")
+            echo "  Using commit range: ${MERGE_BASE:0:7}..${HEAD_SHA:0:7}"
+            echo ""
+  
+            COMMIT_LOG=$(git log --oneline "${MERGE_BASE}..${HEAD_SHA}" 2>/dev/null || true)
+  
+            if [ -z "${COMMIT_LOG}" ]; then
+              echo "  ⚠️  No commits found in range — skipping commit validation"
+            else
+              while IFS= read -r line; do
+                [ -z "${line}" ] && continue
+  
+                SHA="${line%% *}"
+                MSG="${line#* }"
+                echo "  Commit: ${MSG}"
+  
+                # Skip merge commits
+                if [[ "${MSG}" =~ ^Merge ]]; then
+                  echo "    ⏭️  Merge commit — skipped"
+                  continue
+                fi
+  
+                if [[ "${MSG}" =~ ${COMMIT_REGEX} ]]; then
+                  echo "    ✅ Format OK"
+                else
+                  echo "    ❌ Format invalid"
+                  INVALID_COMMITS="${INVALID_COMMITS}\n  - \`${MSG}\` (${SHA:0:7})"
+                fi
+  
+                if [ "${REQUIRE_AB}" = "true" ] && [[ ! "${MSG}" =~ ${AB_REGEX} ]]; then
+                  echo "    ❌ Missing AB# reference"
+                  MISSING_AB_COMMITS="${MISSING_AB_COMMITS}\n  - \`${MSG}\` (${SHA:0:7})"
+                fi
+              done <<< "${COMMIT_LOG}"
+            fi
+  
+            if [ -n "${INVALID_COMMITS}" ]; then
               FAIL_COUNT=$((FAIL_COUNT + 1))
-              ERRORS="${ERRORS}\n❌ **Commits missing AB# reference**:${MISSING_AB_COMMITS}\n"
+              ERRORS="${ERRORS}\n❌ **Commit messages** with invalid format:${INVALID_COMMITS}\n   Expected: \`<type>(scope): <description>${AB_SUFFIX}\`\n"
             else
               PASS_COUNT=$((PASS_COUNT + 1))
-              echo "  ✅ All commits contain AB# reference"
+              echo "  ✅ All commit messages match convention"
             fi
+  
+            if [ "${REQUIRE_AB}" = "true" ]; then
+              if [ -n "${MISSING_AB_COMMITS}" ]; then
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+                ERRORS="${ERRORS}\n❌ **Commits missing AB# reference**:${MISSING_AB_COMMITS}\n"
+              else
+                PASS_COUNT=$((PASS_COUNT + 1))
+                echo "  ✅ All commits contain AB# reference"
+              fi
+            fi
+          else
+            echo "── Commit Messages ──"
+            echo "  ⏭️  Commit message validation disabled"
           fi
-
           echo ""
           echo "── Summary: ${PASS_COUNT} passed, ${FAIL_COUNT} failed ──"
 
