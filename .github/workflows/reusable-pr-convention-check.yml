@@ -48,7 +48,6 @@ jobs:
           REQUIRE_SCOPE: ${{ inputs.require_scope }}
         run: |
           #!/bin/bash
-          set -uo pipefail
 
           # ──────────────────────────────────────────────
           # Build regex patterns from inputs
@@ -60,7 +59,7 @@ jobs:
           fi
 
           if [ "${REQUIRE_AB}" = "true" ]; then
-            AB_SUFFIX=" .* AB#[0-9]+"
+            AB_SUFFIX=" AB#<id>"
             TITLE_REGEX="^(${VALID_TYPES})${SCOPE_PART}: .+ AB#[0-9]+"
             COMMIT_REGEX="^(${VALID_TYPES})${SCOPE_PART}: .+ AB#[0-9]+"
           else
@@ -92,10 +91,10 @@ jobs:
 
           if [[ "${PR_TITLE}" =~ ${TITLE_REGEX} ]]; then
             echo "  ✅ PR title matches convention"
-            ((PASS_COUNT++))
+            PASS_COUNT=$((PASS_COUNT + 1))
           else
             echo "  ❌ PR title does not match convention"
-            ((FAIL_COUNT++))
+            FAIL_COUNT=$((FAIL_COUNT + 1))
             ERRORS="${ERRORS}\n❌ **PR title** does not match the required format.\n   \`${PR_TITLE}\`\n   Expected: \`<type>(scope): <description>${AB_SUFFIX}\`\n"
           fi
 
@@ -103,10 +102,10 @@ jobs:
           if [ "${REQUIRE_AB}" = "true" ]; then
             if [[ "${PR_TITLE}" =~ ${AB_REGEX} ]]; then
               echo "  ✅ PR title contains AB# reference"
-              ((PASS_COUNT++))
+              PASS_COUNT=$((PASS_COUNT + 1))
             else
               echo "  ❌ PR title is missing AB# work item reference"
-              ((FAIL_COUNT++))
+              FAIL_COUNT=$((FAIL_COUNT + 1))
               ERRORS="${ERRORS}\n❌ **PR title** is missing an \`AB#<id>\` work item reference.\n"
             fi
           fi
@@ -158,19 +157,19 @@ jobs:
           fi
 
           if [ -n "${INVALID_COMMITS}" ]; then
-            ((FAIL_COUNT++))
+            FAIL_COUNT=$((FAIL_COUNT + 1))
             ERRORS="${ERRORS}\n❌ **Commit messages** with invalid format:${INVALID_COMMITS}\n   Expected: \`<type>(scope): <description>${AB_SUFFIX}\`\n"
           else
-            ((PASS_COUNT++))
+            PASS_COUNT=$((PASS_COUNT + 1))
             echo "  ✅ All commit messages match convention"
           fi
 
           if [ "${REQUIRE_AB}" = "true" ]; then
             if [ -n "${MISSING_AB_COMMITS}" ]; then
-              ((FAIL_COUNT++))
+              FAIL_COUNT=$((FAIL_COUNT + 1))
               ERRORS="${ERRORS}\n❌ **Commits missing AB# reference**:${MISSING_AB_COMMITS}\n"
             else
-              ((PASS_COUNT++))
+              PASS_COUNT=$((PASS_COUNT + 1))
               echo "  ✅ All commits contain AB# reference"
             fi
           fi
