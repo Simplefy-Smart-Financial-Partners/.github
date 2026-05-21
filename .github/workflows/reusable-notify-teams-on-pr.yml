@@ -1,0 +1,120 @@
+name: Notify Teams on PR (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      filter_author:
+        description: "Only notify when the PR author login matches this value. Leave empty to notify for all authors."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      teams_webhook:
+        description: "Power Automate webhook URL that posts an Adaptive Card to a Teams chat or channel"
+        required: true
+
+jobs:
+  notify:
+    if: >
+      (inputs.filter_author == '' || github.event.pull_request.user.login == inputs.filter_author)
+      &&
+      (
+        (github.event_name == 'pull_request' &&
+         (github.event.action == 'opened' ||
+          (github.event.action == 'closed' && github.event.pull_request.merged == true)))
+        ||
+        (github.event_name == 'pull_request_review' &&
+         (github.event.review.state == 'approved' || github.event.review.state == 'changes_requested'))
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute notification details
+        id: details
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          REVIEWER: ${{ github.event.review.user.login }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$ACTION" = "opened" ]; then
+            heading="Novo PR aberto"
+            color="Accent"
+            extra=""
+          elif [ "$EVENT_NAME" = "pull_request" ] && [ "$ACTION" = "closed" ] && [ "$MERGED" = "true" ]; then
+            heading="PR mergeado"
+            color="Good"
+            extra=""
+          elif [ "$EVENT_NAME" = "pull_request_review" ] && [ "$REVIEW_STATE" = "approved" ]; then
+            heading="PR aprovado"
+            color="Good"
+            extra="$REVIEWER"
+          elif [ "$EVENT_NAME" = "pull_request_review" ] && [ "$REVIEW_STATE" = "changes_requested" ]; then
+            heading="Mudanças solicitadas"
+            color="Warning"
+            extra="$REVIEWER"
+          else
+            echo "::notice::Evento não mapeado — pulando"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "heading=$heading"
+            echo "color=$color"
+            echo "extra=$extra"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Send notification to Teams
+        if: steps.details.outputs.skip == 'false'
+        env:
+          WEBHOOK_URL: ${{ secrets.teams_webhook }}
+          HEADING: ${{ steps.details.outputs.heading }}
+          COLOR: ${{ steps.details.outputs.color }}
+          EXTRA: ${{ steps.details.outputs.extra }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_REPO: ${{ github.repository }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "::warning::teams_webhook não configurado — pulando"
+            exit 0
+          fi
+          facts=$(jq -nc \
+            --arg repo "$PR_REPO" \
+            --arg author "$PR_AUTHOR" \
+            --arg branch "$PR_BRANCH" \
+            --arg extra "$EXTRA" \
+            '[
+              { title: "Repo:", value: $repo },
+              { title: "Autor:", value: $author },
+              { title: "Branch:", value: $branch }
+            ] + (if $extra == "" then [] else [{ title: "Por:", value: $extra }] end)')
+          payload=$(jq -nc \
+            --arg heading "$HEADING" \
+            --arg color "$COLOR" \
+            --arg title "$PR_TITLE" \
+            --arg url "$PR_URL" \
+            --argjson facts "$facts" \
+            '{
+              type: "message",
+              attachments: [{
+                contentType: "application/vnd.microsoft.card.adaptive",
+                content: {
+                  type: "AdaptiveCard",
+                  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                  version: "1.4",
+                  body: [
+                    { type: "TextBlock", size: "Medium", weight: "Bolder", text: $heading, color: $color },
+                    { type: "TextBlock", text: $title, wrap: true },
+                    { type: "FactSet", facts: $facts }
+                  ],
+                  actions: [
+                    { type: "Action.OpenUrl", title: "Abrir PR no GitHub", url: $url }
+                  ]
+                }
+              }]
+            }')
+          curl -sS -X POST -H "Content-Type: application/json" -d "$payload" "$WEBHOOK_URL"
